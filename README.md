@@ -33,7 +33,6 @@
 • 基于Dubbo的微服务架构
 • RabbitMQ消息队列任务调度
 • Redis缓存加速
-• 支持K8s集群部署
 
 📦 功能矩阵
 
@@ -64,19 +63,13 @@
 git clone https://github.com/DuanInnovator/SuperAutoStudy.git
 ```
 
-2. Docker部署：
-```bash
-docker-compose up -d
-```
-
 
 
 📝 反馈渠道
 
 📮 问题反馈：
 • [GitHub Issues](https://github.com/DuanInnovator/SuperAutoStudy/issues)
-• 客服邮箱：support@xxtmooc.com
-• QQ交流群：1033757261
+• 客服邮箱：thwy@xxtmooc.com
 
 💡 建议征集：
 欢迎提交Pull Request或通过Discussions分享您的想法！
