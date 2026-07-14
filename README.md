@@ -64,7 +64,7 @@ cd SuperAutoStudy
 
 - 📘 [完整使用文档](https://doc.xxtmooc.com)
 - ❓ [常见问题与解决方案](https://github.com/DuanInnovator/SuperAutoStudy/issues)
-- 📩 反馈邮箱：thwy@xxtmooc.com
+- 📩 反馈邮箱：3049643162@qq.com
 
 欢迎通过以下方式参与项目：
 - 提交 [Issue](https://github.com/DuanInnovator/SuperAutoStudy/issues) 报告问题
@@ -79,18 +79,4 @@ cd SuperAutoStudy
 
 ```
 Copyright © 2024–2025 DuanInnovator
-```
-
----
-
-## ☕ 支持作者
-
-如果本项目对您有所帮助，欢迎 Star ⭐ 或扫码支持：
-
-<div style="display: flex; gap: 16px; margin: 16px 0;">
-  <img src="https://github.com/user-attachments/assets/9028bb09-9d4d-441b-93a3-3de341bc5c14" width="128" alt="WeChat Pay">
-  <img src="https://github.com/user-attachments/assets/db77485d-6345-4471-a09e-7aadd4932787" width="128" alt="Alipay">
-</div>
-
-> 合理使用，尊重教育，技术向善。
 ```
