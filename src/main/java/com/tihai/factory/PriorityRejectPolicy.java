@@ -1,27 +1,16 @@
 package com.tihai.factory;
 
-import com.tihai.queue.PriorityTaskWrapper;
-
 import java.util.concurrent.RejectedExecutionHandler;
-import java.util.concurrent.ThreadPoolExecutor; // 关键修正：使用JDK标准线程池类
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
- * 自定义拒绝策略（优先级降级重试）
+ * Rejects explicitly so the task lifecycle can return the task to PENDING.
  */
 public class PriorityRejectPolicy implements RejectedExecutionHandler {
 
     @Override
     public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
-        if (executor.isShutdown()) {
-            return;
-        }
-
-        if (r instanceof PriorityTaskWrapper) {
-            PriorityTaskWrapper task = (PriorityTaskWrapper) r;
-            if(task.getPriority()>=1){
-                task.decreasePriority(1); // 优先级降级
-            }
-            executor.execute(task);   // 重新入队
-        }
+        throw new RejectedExecutionException("任务队列已满或线程池已关闭");
     }
 }

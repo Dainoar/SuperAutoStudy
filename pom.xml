@@ -46,7 +46,7 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
-            <version>1.18.22</version>
+            <version>1.18.36</version>
             <scope>compile</scope>
         </dependency>
 
@@ -61,12 +61,6 @@
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
             <version>4.12.0</version> <!-- 最新稳定版 -->
-        </dependency>
-
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>2.15.4</version> <!-- 最新稳定版 -->
         </dependency>
 
         <dependency>
@@ -227,13 +221,6 @@
         </dependency>
 
         <dependency>
-            <groupId>com.baomidou</groupId>
-            <artifactId>mybatis-plus-boot-starter</artifactId>
-            <version>3.4.1</version>
-        </dependency>
-
-
-        <dependency>
             <groupId>javax.servlet</groupId>
             <artifactId>javax.servlet-api</artifactId>
             <scope>provided</scope>
@@ -272,20 +259,19 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.5.1</version>
+                <version>3.11.0</version>
                 <configuration>
+                    <release>8</release>
                     <compilerArgs>
-                        <!-- 过期的方法的警告-->
                         <arg>-Xlint:deprecation</arg>
                     </compilerArgs>
-                    <compilerArguments>
-                        <!-- 是否输出所有的编译信息（包括类的加载等）-->
-                        <!--<verbose />-->
-                        <!-- 解决maven命令编译报错，因为rt.jar 和jce.jar在jre的lib下面，不在jdk的lib下面，
-                        导致maven找不到（java7以后会出现这个问题），将这2个jar包拷贝到jdk的lib下面估计也好使-->
-                        <bootclasspath>${java.home}\lib\rt.jar;${java.home}\lib\jce.jar</bootclasspath>
-                    </compilerArguments>
                 </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
             </plugin>
 
         </plugins>

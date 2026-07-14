@@ -59,8 +59,11 @@ tiku:
   settings:
     endpoints:
         - name:  #示例local,icodef,buguake,wanneng，不填写默认使用所有免费题库
-          token: 
-        - name: 
+          token:
+        - name:
           token:
 
+security:
+  credential-key: ${SUPER_AUTO_CREDENTIAL_KEY:}
+  api-token: ${SUPER_AUTO_API_TOKEN:}
 

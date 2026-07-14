@@ -26,7 +26,7 @@ public class SuperStarUserServiceImpl extends ServiceImpl<SuperStarUserMapper, W
     public WkUser getUserByAccount(String account) {
         LambdaQueryWrapper<WkUser> wkUserLambdaQueryWrapper = new LambdaQueryWrapper<>();
         wkUserLambdaQueryWrapper.eq(WkUser::getAccount, account);
-        return this.getOne(wkUserLambdaQueryWrapper);
+        return this.getOne(wkUserLambdaQueryWrapper, false);
 
     }
 }

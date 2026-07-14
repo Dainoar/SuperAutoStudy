@@ -10,6 +10,7 @@ import com.tihai.service.superstar.SuperStarLoginService;
 import com.tihai.service.superstar.SuperStarUserService;
 import com.tihai.utils.AESCipher;
 import com.tihai.utils.JsonParser;
+import com.tihai.utils.CredentialCipher;
 import ma.glasnost.orika.MapperFacade;
 import okhttp3.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,8 +22,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.stream.Collectors;
 
 /**
@@ -48,7 +47,7 @@ public class SuperStarLoginServiceImpl extends ServiceImpl<SuperStarUserMapper, 
     private MapperFacade mapperFacade;
 
     @Autowired
-    private ThreadPoolExecutor threadPoolExecutor;
+    private CredentialCipher credentialCipher;
 
     /**
      * 超星登录
@@ -60,9 +59,10 @@ public class SuperStarLoginServiceImpl extends ServiceImpl<SuperStarUserMapper, 
     public String login(WkUser wkUser,boolean isUpdate) {
 
         WkUser userByAccount = userService.getUserByAccount(wkUser.getAccount());
-        if(!isUpdate && userByAccount!=null && StringUtils.hasLength(userByAccount.getCookies()) && wkUser.getCookies()!=null){
-            return userByAccount.getCookies();
+        if(!isUpdate && userByAccount!=null && StringUtils.hasLength(userByAccount.getCookies())){
+            return credentialCipher.decrypt(userByAccount.getCookies());
         }
+        String password = credentialCipher.decrypt(wkUser.getPassword());
         SuperStarLog startLog = mapperFacade.map(wkUser, SuperStarLog.class);
 
         CookieJar cookieJar = new CookieJar() {
@@ -90,7 +90,7 @@ public class SuperStarLoginServiceImpl extends ServiceImpl<SuperStarUserMapper, 
         FormBody formBody = new FormBody.Builder()
                 .add("fid", "-1")
                 .add("uname", cipher.encrypt(wkUser.getAccount()))
-                .add("password", cipher.encrypt(wkUser.getPassword()))
+                .add("password", cipher.encrypt(password))
                 .add("refer", "https%3A%2F%2Fi.chaoxing.com")
                 .add("t", "true")
                 .add("forbidotherlogin", "0")
@@ -114,26 +114,25 @@ public class SuperStarLoginServiceImpl extends ServiceImpl<SuperStarUserMapper, 
                         .map(Cookie::toString)
                         .collect(Collectors.joining(", "));
 
-                CompletableFuture.runAsync(() -> {
-                    if (userByAccount != null) {
-                        userByAccount.setCookies(cookieStr);
-                        this.baseMapper.updateById(userByAccount);
-                    } else {
-                        wkUser.setCookies(cookieStr);
-                        this.save(wkUser);
-                    }
-                    startLog.setRemark(GlobalConstant.LOGIN_SUCCESS);
-                }, threadPoolExecutor);
+                if (userByAccount != null) {
+                    userByAccount.setCookies(credentialCipher.encrypt(cookieStr));
+                    userByAccount.setPassword(credentialCipher.encrypt(password));
+                    this.baseMapper.updateById(userByAccount);
+                } else {
+                    wkUser.setPassword(credentialCipher.encrypt(password));
+                    wkUser.setCookies(credentialCipher.encrypt(cookieStr));
+                    this.save(wkUser);
+                }
+                startLog.setRemark(GlobalConstant.LOGIN_SUCCESS);
 
                 return cookieStr;
 
 
             } else {
-                startLog.setRemark(result.get("msg2") != null ? result.get("msg2").toString() : GlobalConstant.LOGIN_FAIL);
+                startLog.setRemark(result != null && result.get("msg2") != null ? result.get("msg2").toString() : GlobalConstant.LOGIN_FAIL);
             }
 
         } catch (IOException e) {
-            Map<String, Object> ret = new HashMap<>();
             startLog.setRemark(GlobalConstant.LOGIN_FAIL + e.getMessage());
         }
         superStarLogService.saveLog(startLog);

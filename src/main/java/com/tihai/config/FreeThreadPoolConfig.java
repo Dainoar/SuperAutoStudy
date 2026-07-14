@@ -3,13 +3,13 @@ package com.tihai.config;
 import com.tihai.factory.CustomThreadFactory;
 import com.tihai.factory.PriorityRejectPolicy;
 import com.tihai.properties.ThreadPoolProperties;
+import com.tihai.queue.BoundedPriorityBlockingQueue;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.concurrent.ConcurrentTaskExecutor;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -30,7 +30,7 @@ public class FreeThreadPoolConfig {
 
         log.error("当前核心线程数为:{}", config.getCoreSize());
         // 创建优先级阻塞队列
-        BlockingQueue<Runnable> queue = new PriorityBlockingQueue<>(config.getQueueCapacity());
+        BlockingQueue<Runnable> queue = new BoundedPriorityBlockingQueue<>(config.getQueueCapacity());
 
         // 构建线程池
         ThreadPoolExecutor executor = new ThreadPoolExecutor(
