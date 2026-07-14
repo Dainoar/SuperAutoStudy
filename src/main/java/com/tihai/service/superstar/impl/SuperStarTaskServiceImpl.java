@@ -18,16 +18,20 @@ import com.tihai.exception.BusinessException;
 import com.tihai.factory.CustomThreadFactory;
 import com.tihai.factory.PriorityRejectPolicy;
 import com.tihai.manager.RollBackManager;
+import com.tihai.manager.CoursePointNavigator;
+import com.tihai.manager.TaskLifecycle;
 import com.tihai.mapper.SuperStarMapper;
 import com.tihai.properties.StudyProperties;
 import com.tihai.properties.ThreadPoolProperties;
 import com.tihai.queue.PriorityTaskWrapper;
+import com.tihai.queue.BoundedPriorityBlockingQueue;
 import com.tihai.service.superstar.SuperStarLogService;
 import com.tihai.service.superstar.SuperStarLoginService;
 import com.tihai.service.superstar.SuperStarTaskService;
 import com.tihai.service.superstar.SuperStarUserService;
 import com.tihai.utils.CourseUtil;
 import com.tihai.utils.ServerInfoUtil;
+import com.tihai.utils.CredentialCipher;
 import lombok.extern.slf4j.Slf4j;
 import ma.glasnost.orika.MapperFacade;
 import org.apache.commons.lang3.StringUtils;
@@ -35,9 +39,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -83,6 +87,9 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
     @Autowired
     private StudyProperties studyProperties;
 
+    @Autowired
+    private CredentialCipher credentialCipher;
+
 
     private volatile boolean isShuttingDown = false;
     private final Object shutdownLock = new Object();
@@ -91,6 +98,7 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
     // 日志批量保存的缓冲队列
     private final BlockingQueue<SuperStarLog> logQueue = new LinkedBlockingQueue<>();
     private final ConcurrentHashMap<Long, SuperStarLog> logMap = new ConcurrentHashMap<>();
+    private Thread logWriterThread;
 
     public SuperStarTaskServiceImpl() throws NacosException {
     }
@@ -173,7 +181,7 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
                 return;
             }
 
-            BlockingQueue<Runnable> queue = new PriorityBlockingQueue<>(config.getQueueCapacity());
+            BlockingQueue<Runnable> queue = new BoundedPriorityBlockingQueue<>(config.getQueueCapacity());
 
             // 重新构建线程池
             taskExecutor = new ThreadPoolExecutor(
@@ -192,8 +200,32 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
 
     @PostConstruct
     public void init() {
-        // 启动一个单独的线程来处理日志的批量保存
-        new Thread(this::batchSaveLogs).start();
+        recoverInterruptedTasks();
+        logWriterThread = new Thread(this::batchSaveLogs, "super-star-log-writer");
+        logWriterThread.setDaemon(true);
+        logWriterThread.start();
+        startChaoxingTask();
+    }
+
+    @PreDestroy
+    public void stopLogWriter() {
+        if (logWriterThread != null) {
+            logWriterThread.interrupt();
+        }
+    }
+
+    private void recoverInterruptedTasks() {
+        List<SuperStarTask> interruptedTasks = list(new LambdaQueryWrapper<SuperStarTask>()
+                .in(SuperStarTask::getStatus,
+                        WkTaskStatusEnum.QUEUE.getCode(),
+                        WkTaskStatusEnum.PROCESSING.getCode()));
+        interruptedTasks.stream()
+                .filter(task -> TaskLifecycle.shouldRecover(task.getStatus()))
+                .forEach(task -> task.setStatus(TaskLifecycle.recoveredStatus()));
+        if (!interruptedTasks.isEmpty()) {
+            updateBatchById(interruptedTasks);
+            log.info("已恢复 {} 个因服务重启中断的任务", interruptedTasks.size());
+        }
     }
 
     private void batchSaveLogs() {
@@ -245,7 +277,7 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
         LambdaQueryWrapper<SuperStarTask> superStarTaskLambdaQueryWrapper = new LambdaQueryWrapper<>();
         superStarTaskLambdaQueryWrapper.eq(SuperStarTask::getLoginAccount, loginAccount);
         superStarTaskLambdaQueryWrapper.eq(SuperStarTask::getCourseId, courseId);
-        return this.getOne(superStarTaskLambdaQueryWrapper);
+        return this.getOne(superStarTaskLambdaQueryWrapper, false);
     }
 
     /**
@@ -259,7 +291,7 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
         LambdaQueryWrapper<SuperStarTask> superStarTaskLambdaQueryWrapper = new LambdaQueryWrapper<>();
         superStarTaskLambdaQueryWrapper.eq(SuperStarTask::getLoginAccount, loginAccount);
         superStarTaskLambdaQueryWrapper.eq(SuperStarTask::getCourseName, courseName);
-        return this.getOne(superStarTaskLambdaQueryWrapper);
+        return this.getOne(superStarTaskLambdaQueryWrapper, false);
     }
 
     /**
@@ -277,9 +309,11 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
         }
         if (task == null) {
             SuperStarTask chaoXingTask = mapperFacade.map(courseSubmitTaskDTO, SuperStarTask.class);
+            chaoXingTask.setPassword(credentialCipher.encrypt(chaoXingTask.getPassword()));
             chaoXingTask.setStatus(WkTaskStatusEnum.PENDING.getCode());
-            chaoXingTask.setId(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))); //当前version使用UUID
+            chaoXingTask.setId(UUID.randomUUID().toString());
             chaoXingTask.setPriority(1);
+            chaoXingTask.setRetryCount(0);
             chaoXingTask.setCreatTime(LocalDateTime.now());
             chaoXingTask.setMachineNum(serverInfoUtil.getCurrentServerInstance());
             this.baseMapper.insert(chaoXingTask);
@@ -310,22 +344,57 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
                 throw new RuntimeException(e);
             }
             boolean isUpdated = this.updateById(task);
+            if (!isUpdated) {
+                log.warn("任务入队状态更新失败，taskId={}", task.getId());
+                return;
+            }
             Runnable taskWrapper = new PriorityTaskWrapper(() -> {
                 try {
                     executeCourseTask(task);
                 } catch (Exception e) {
-                    if (task.getRetryCount() == RetryConstant.DEFAULT_RETRY_COUNT) {
+                    int retryCount = task.getRetryCount() == null ? 0 : task.getRetryCount();
+                    if (retryCount >= RetryConstant.DEFAULT_RETRY_COUNT) {
                         task.setStatus(WkTaskStatusEnum.ABNORMAL.getCode());
                     } else {
-                        task.setRetryCount(task.getRetryCount() + 1);
+                        task.setRetryCount(retryCount + 1);
                         task.setStatus(WkTaskStatusEnum.PENDING.getCode());
                     }
                     this.updateById(task);
+                    log.warn("任务执行失败，将按状态重试。taskId={}, retryCount={}",
+                            task.getId(), task.getRetryCount(), e);
+                    if (WkTaskStatusEnum.PENDING.getCode().equals(task.getStatus())) {
+                        startChaoxingTask();
+                    }
                 }
             }, task.getPriority(), task.getId());
 
-            taskExecutor.execute(taskWrapper);
+            try {
+                taskExecutor.execute(taskWrapper);
+            } catch (RejectedExecutionException e) {
+                task.setStatus(WkTaskStatusEnum.PENDING.getCode());
+                this.updateById(task);
+                throw e;
+            }
         });
+    }
+
+    @Override
+    public List<SuperStarTask> listTasks(String loginAccount) {
+        LambdaQueryWrapper<SuperStarTask> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(StringUtils.isNotBlank(loginAccount), SuperStarTask::getLoginAccount, loginAccount);
+        wrapper.orderByDesc(SuperStarTask::getCreatTime);
+        return list(wrapper);
+    }
+
+    @Override
+    public boolean pauseTask(String taskId) {
+        SuperStarTask task = getById(taskId);
+        if (task == null || !(WkTaskStatusEnum.PENDING.getCode().equals(task.getStatus())
+                || WkTaskStatusEnum.QUEUE.getCode().equals(task.getStatus()))) {
+            return false;
+        }
+        task.setStatus(WkTaskStatusEnum.PAUSED.getCode());
+        return updateById(task);
     }
 
     /**
@@ -334,6 +403,12 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
      * @param task 超星学习任务
      */
     public void executeCourseTask(SuperStarTask task) {
+        SuperStarTask persistedTask = getById(task.getId());
+        if (persistedTask == null || WkTaskStatusEnum.PAUSED.getCode().equals(persistedTask.getStatus())) {
+            return;
+        }
+        task.setStatus(WkTaskStatusEnum.PROCESSING.getCode());
+        this.updateById(task);
         WkUser user = userService.getUserByAccount(task.getLoginAccount());
         SuperStarLog log = superStarLogService.getLatestLogByLoginAccount(task.getLoginAccount(), task.getCourseName());
 
@@ -344,28 +419,22 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
         }
 
 
-        if (user == null || user.getCookies() == null) {
-            if (task.getRetryCount() < RetryConstant.DEFAULT_RETRY_COUNT) {
-                task.setStatus(WkTaskStatusEnum.PENDING.getCode());
-                task.setRetryCount(task.getRetryCount() + 1);
-            } else {
-                task.setStatus(WkTaskStatusEnum.ABNORMAL.getCode());
-            }
-            WkUser wkUser = new WkUser();
-            wkUser.setAccount(task.getLoginAccount());
-            wkUser.setPassword(task.getPassword());
-            loginService.login(wkUser, true);
-            this.updateById(task);
-            log.setStatus(WkTaskStatusEnum.ABNORMAL.getCode());
-            log.setErrorMessage("用户未登录");
-            logQueue.offer(log);
-            return;
-        }
-
         try {
+            if (user == null || user.getCookies() == null) {
+                WkUser wkUser = new WkUser();
+                wkUser.setAccount(task.getLoginAccount());
+                wkUser.setPassword(task.getPassword());
+                String cookies = loginService.login(wkUser, true);
+                if (StringUtils.isEmpty(cookies)) {
+                    throw new IllegalStateException("用户登录失败");
+                }
+                user = wkUser;
+                user.setCookies(cookies);
+            }
+
             Course readyCourse = new Course();
             courseUtil.setAccount(task.getLoginAccount());
-            courseUtil.setCookies(user.getCookies());
+            courseUtil.setCookies(credentialCipher.decrypt(user.getCookies()));
             if (task.getCourseId() != null) {
                 readyCourse = courseUtil.getCourseList().stream()
                         .filter(course -> course.getCourseId().equals(task.getCourseId()))
@@ -388,25 +457,28 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
             }
 
             if (readyCourse == null) {
-                loginService.login(user, true);
-                log.setStatus(WkTaskStatusEnum.ABNORMAL.getCode());
-                log.setErrorMessage(GlobalConstant.COURSE_INFO_GET_FAIL);
-                logQueue.offer(log);
-                return;
+                throw new IllegalStateException(GlobalConstant.COURSE_INFO_GET_FAIL);
             }
 
             List<CoursePoint> pointList = courseUtil.getCoursePoint(
                     readyCourse.getCourseId(), readyCourse.getClazzId(), readyCourse.getCpi());
 
-            processCoursePoints(task, log, readyCourse, pointList);
+            if (!processCoursePoints(task, log, readyCourse, pointList)) {
+                throw new IllegalStateException("课程章节执行失败");
+            }
+            task.setStatus(WkTaskStatusEnum.FINISHED.getCode());
+            this.updateById(task);
         } catch (Exception e) {
             log.setStatus(WkTaskStatusEnum.ABNORMAL.getCode());
-            log.setErrorMessage("系统异常");
+            log.setErrorMessage(e.getMessage());
             logQueue.offer(log);
+            throw new IllegalStateException("课程任务执行失败: " + task.getId(), e);
+        } finally {
+            courseUtil.clearSession();
         }
     }
 
-    private void processCoursePoints(SuperStarTask task, SuperStarLog log, Course readyCourse, List<CoursePoint> pointList) {
+    private boolean processCoursePoints(SuperStarTask task, SuperStarLog log, Course readyCourse, List<CoursePoint> pointList) {
         if (log == null) {
             log = mapperFacade.map(task, SuperStarLog.class);
             log.setId(Long.valueOf(UUID.randomUUID().toString()));
@@ -416,7 +488,7 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
 
         int pointIndex = log.getCurrentChapterIndex() != null ? log.getCurrentChapterIndex() : 0;
 
-        List<ChapterPoint> chapterPointList = pointList.get(0).getPoints();
+        List<ChapterPoint> chapterPointList = CoursePointNavigator.flatten(pointList);
 
 
         while (pointIndex < chapterPointList.size()) {
@@ -438,8 +510,7 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
                     continue;
                 }
 
-                if (jobs.stream().findFirst().map(job -> job instanceof Map && Boolean.TRUE.equals(((Map<?, ?>) job).get("notOpen"))).orElse(false)) {
-                    pointIndex--;
+                if (jobInfo != null && jobInfo.stream().anyMatch(info -> Boolean.TRUE.equals(info.getNotOpen()))) {
                     rb.addTimes(chapterPoint.getId());
                     continue;
                 }
@@ -452,13 +523,13 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
                             case JobTypeConstant.VIDEO:
                                 boolean isAudio = false;
                                 try {
-                                    courseUtil.studyVideo(readyCourse, job, jobInfo.get(0), studyProperties.getSpeed(), "Video", log);
+                                courseUtil.studyVideo(readyCourse, job, requiredJobInfo(jobInfo, job), studyProperties.getSpeed(), "Video", log);
                                 } catch (Exception e) {
                                     isAudio = true;
                                 }
                                 if (isAudio) {
                                     try {
-                                        courseUtil.studyVideo(readyCourse, job, jobInfo.get(0), studyProperties.getSpeed(), "Audio", log);
+                                        courseUtil.studyVideo(readyCourse, job, requiredJobInfo(jobInfo, job), studyProperties.getSpeed(), "Audio", log);
                                     } catch (Exception e) {
                                         log.setErrorMessage("异常任务 -> 章节: " + job.getId() + "，已跳过");
                                     }
@@ -468,10 +539,10 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
                                 courseUtil.studyDocument(readyCourse, job);
                                 break;
                             case JobTypeConstant.READ:
-                                courseUtil.studyRead(readyCourse, job, jobInfo.get(0), log);
+                                courseUtil.studyRead(readyCourse, job, requiredJobInfo(jobInfo, job), log);
                                 break;
                             case JobTypeConstant.QUESTION:
-                                courseUtil.studyWork(readyCourse, job, jobInfo.get(0), log);
+                                courseUtil.studyWork(readyCourse, job, requiredJobInfo(jobInfo, job), log);
                             default:
                                 break;
 
@@ -481,6 +552,7 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
                         log.setEndTime(LocalDateTime.now());
                         log.setStatus(WkTaskStatusEnum.ABNORMAL.getCode());
                         log.setErrorMessage("任务异常，任务ID=" + job.getTitle());
+                        throw new IllegalStateException("任务点执行失败: " + job.getId(), e);
                     }
                 }
                 pointIndex++;
@@ -497,11 +569,11 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
                 log.setStatus(WkTaskStatusEnum.ABNORMAL.getCode());
                 log.setErrorMessage("章节处理异常");
                 logQueue.offer(log);
-                break;
+                return false;
             }
         }
 
-        if (pointIndex >= pointList.size()) {
+        if (CoursePointNavigator.isComplete(pointIndex, chapterPointList.size())) {
             log.setEndTime(LocalDateTime.now());
             log.setCurrentChapterIndex(pointIndex - 1);
             log.setCurrentProgress(BigDecimal.valueOf(100));
@@ -509,5 +581,13 @@ public class SuperStarTaskServiceImpl extends ServiceImpl<SuperStarMapper, Super
 
             logQueue.offer(log);
         }
+        return CoursePointNavigator.isComplete(pointIndex, chapterPointList.size());
+    }
+
+    private JobInfo requiredJobInfo(List<JobInfo> jobInfo, Job job) {
+        if (jobInfo == null || jobInfo.isEmpty()) {
+            throw new IllegalStateException("任务点缺少执行信息: " + job.getId());
+        }
+        return jobInfo.get(0);
     }
 }

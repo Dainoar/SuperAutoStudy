@@ -2,6 +2,9 @@ package com.tihai.manager;
 
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * @Copyright : DuanInnovator
  * @Description :回滚管理器
@@ -11,18 +14,13 @@ import org.springframework.stereotype.Component;
  **/
 @Component
 public class RollBackManager {
-    private int rollbackTimes = 0;
-    private String rollbackId = "";
+    private final ConcurrentHashMap<String, AtomicInteger> rollbackCounts = new ConcurrentHashMap<>();
 
     public void addTimes(String id) throws Exception {
-        if (id.equals(rollbackId) && rollbackTimes >= 3) {
+        int attempts = rollbackCounts.computeIfAbsent(id, key -> new AtomicInteger()).incrementAndGet();
+        if (attempts > 3) {
+            rollbackCounts.remove(id);
             throw new RuntimeException("回滚次数已达3次，请手动检查学习通任务点完成情况");
-        } else if (!id.equals(rollbackId)) {
-            // 新任务
-            rollbackId = id;
-            rollbackTimes = 1;
-        } else {
-            rollbackTimes++;
         }
     }
 }

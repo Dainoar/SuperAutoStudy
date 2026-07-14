@@ -51,3 +51,7 @@ custom:
 study:
   chaoxing:
     speed: 3
+
+security:
+  credential-key: ${SUPER_AUTO_CREDENTIAL_KEY:}
+  api-token: ${SUPER_AUTO_API_TOKEN:}

@@ -6,6 +6,7 @@ import com.tihai.domain.chaoxing.SuperStarTask;
 import com.tihai.dubbo.dto.CourseSubmitTaskDTO;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * @Copyright : DuanInnovator
@@ -55,5 +56,9 @@ public interface SuperStarTaskService extends IService<SuperStarTask> {
      * @param task
      */
     void executeCourseTask(SuperStarTask task) throws IOException;
+
+    List<SuperStarTask> listTasks(String loginAccount);
+
+    boolean pauseTask(String taskId);
 }
 

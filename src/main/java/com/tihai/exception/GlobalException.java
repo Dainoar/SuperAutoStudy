@@ -80,10 +80,14 @@ public class GlobalException {
 
     }
 
+    @ExceptionHandler(BusinessException.class)
+    public R handleBusinessException(BusinessException ex) {
+        return R.error(ex.getCode(), ex.getMsg(), ex.getData());
+    }
 
-    @ExceptionHandler(Exception.class) //捕获所有异常
+    @ExceptionHandler(Exception.class)
     public R ex(Exception ex) {
-        ex.printStackTrace();
-        return R.error(404, BizCodeEnum.SYSTEM_ERROR.getMsg(), null);
+        log.error("未处理的请求异常", ex);
+        return R.error(BizCodeEnum.SYSTEM_ERROR.getCode(), BizCodeEnum.SYSTEM_ERROR.getMsg(), null);
     }
 }

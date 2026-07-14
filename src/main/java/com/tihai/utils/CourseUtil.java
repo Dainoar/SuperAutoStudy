@@ -42,10 +42,8 @@ import java.util.stream.Collectors;
 public class CourseUtil {
 
 
-    public Map<String, String> cookies;
-    public List<Cookie> cookieList = new ArrayList<>();
-
-    private String account;
+    private final ThreadLocal<SessionContext> sessionContext =
+            ThreadLocal.withInitial(SessionContext::new);
 
     @Autowired
     private SuperStarLogService superStarLogService;
@@ -60,13 +58,21 @@ public class CourseUtil {
     private Query query;
 
     public void setAccount(String account) {
-        this.account = account;
+        sessionContext.get().account = account;
     }
 
 
     public void setCookies(String cookies) {
-        this.cookies = convertCookieStringToMap(cookies);
-        cookieList = convertCookieStringToList(cookies);
+        SessionContext session = sessionContext.get();
+        session.cookies = convertCookieStringToMap(cookies);
+        session.cookieList = convertCookieStringToList(cookies);
+    }
+
+    /**
+     * Clears request-scoped session state before a pooled worker is reused.
+     */
+    public void clearSession() {
+        sessionContext.remove();
     }
 
     /**
@@ -101,6 +107,9 @@ public class CourseUtil {
     }
 
     public static Map<String, String> convertCookieStringToMap(String cookieStr) {
+        if (cookieStr == null || cookieStr.trim().isEmpty()) {
+            return new LinkedHashMap<>();
+        }
         // 去掉前后的方括号
         if (cookieStr.startsWith("[") && cookieStr.endsWith("]")) {
             cookieStr = cookieStr.substring(1, cookieStr.length() - 1);
@@ -129,7 +138,27 @@ public class CourseUtil {
     }
 
     public String getValue(String key) {
-        return cookies.get(key);
+        return sessionContext.get().cookies.get(key);
+    }
+
+    private String getAccount() {
+        return sessionContext.get().account;
+    }
+
+    private List<Cookie> getCookieList() {
+        return sessionContext.get().cookieList;
+    }
+
+    private String getCookieHeader() {
+        return getCookieList().stream()
+                .map(cookie -> cookie.name() + "=" + cookie.value())
+                .collect(Collectors.joining("; "));
+    }
+
+    private static final class SessionContext {
+        private String account;
+        private Map<String, String> cookies = new LinkedHashMap<>();
+        private List<Cookie> cookieList = new ArrayList<>();
     }
 
 
@@ -197,6 +226,10 @@ public class CourseUtil {
             @Override
             public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
                 String domain = url.host();
+                String account = getAccount();
+                if (account == null || cookieService == null) {
+                    return;
+                }
 
                 // 获取现有Cookie（从内存或数据库）
                 List<Cookie> existingCookies = cookieCache.computeIfAbsent(domain, k -> {
@@ -331,6 +364,7 @@ public class CourseUtil {
             public List<Cookie> loadForRequest(HttpUrl url) {
 
                 try {
+                    String account = getAccount();
                     // 1. 检查基础条件
                     if (url == null || account == null || cookieService == null) {
                         System.out.println("获取Cookie异常: 参数错误 -> " +
@@ -468,7 +502,7 @@ public class CourseUtil {
         OkHttpClient client = initSession(false, false);
         String url = String.format("https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse?courseid=%s&clazzid=%s&cpi=%s&ut=s",
                 courseId, clazzId, cpi);
-        Request request = new Request.Builder().url(url).addHeader("Cookie", cookieList.toString()).build();
+        Request request = new Request.Builder().url(url).addHeader("Cookie", getCookieHeader()).build();
         Response response = client.newCall(request).execute();
         String respText = response.body().string();
         CoursePoint stringObjectMap = Decode.decodeCoursePoint(respText);
